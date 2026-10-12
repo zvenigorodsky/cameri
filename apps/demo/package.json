@@ -1,0 +1,16 @@
+{
+  "name": "@camerihq/demo",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Minimal demo app for e2e testing",
+  "scripts": {
+    "dev": "vite --port 5180 --strictPort",
+    "build": "vite build",
+    "preview": "vite preview",
+    "clean": "rm -rf dist .turbo"
+  },
+  "devDependencies": {
+    "vite": "^8.2.2"
+  }
+}

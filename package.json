@@ -17,8 +17,8 @@
     "db:generate": "pnpm --filter @camerihq/db db:generate",
     "db:migrate": "pnpm --filter @camerihq/db db:migrate",
     "db:studio": "pnpm --filter @camerihq/db db:studio",
-    "docker:up": "docker compose -f docker/docker-compose.yml up -d",
-    "docker:down": "docker compose -f docker/docker-compose.yml down",
+    "docker:up": "podman compose -f docker/docker-compose.yml up -d",
+    "docker:down": "podman compose -f docker/docker-compose.yml down",
     "version:set": "node scripts/set-version.mjs"
   },
   "devDependencies": {
