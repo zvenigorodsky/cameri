@@ -7,7 +7,7 @@ export const INGEST_API_VERSION = "v1";
 
 /** Header the reporter and CLI send their project record key in. */
 export const RECORD_KEY_HEADER = "x-cameri-key";
-/** Header carrying the reporter version, so the server can spot stale clients. */
+/** Header carrying the client's name and package version, for logs and errors. */
 export const CLIENT_VERSION_HEADER = "x-cameri-client";
 
 export const TEST_STATUSES = [

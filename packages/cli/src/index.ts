@@ -18,17 +18,15 @@ import {
   type Shard,
   type ShardOutcome,
 } from "./orchestrate.ts";
+import { CLI_VERSION } from "./version.ts";
 
-declare const __CAMERI_VERSION__: string;
-const VERSION =
-  typeof __CAMERI_VERSION__ === "string" ? __CAMERI_VERSION__ : "0.0.0-dev";
 
 const program = new Command();
 
 program
   .name("cameri")
   .description("Run Playwright with Cameri reporting wired up")
-  .version(VERSION);
+  .version(CLI_VERSION);
 
 program
   .command("run", { isDefault: true })

@@ -35,10 +35,15 @@ import { HTTPException } from "hono/http-exception";
 import { recordKeyAuth } from "../auth.ts";
 import type { AppContext } from "../context.ts";
 import { lockRun, settleRun } from "../shard-health.ts";
+import { versionGuard } from "../version-guard.ts";
 
 export function ingestRoutes(app: AppContext) {
   const router = new Hono();
   const { db, storage, env } = app;
+
+  // First, so an incompatible client is refused before anything else runs, and
+  // every response carries the server's version.
+  router.use("*", versionGuard());
 
   router.get("/health", (c) => c.json({ ok: true }));
 

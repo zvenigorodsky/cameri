@@ -1,5 +1,4 @@
 import { defineConfig } from "tsup";
-import pkg from "./package.json" with { type: "json" };
 
 export default defineConfig({
   entry: ["src/index.ts"],
@@ -11,7 +10,4 @@ export default defineConfig({
   platform: "node",
   banner: { js: "#!/usr/bin/env node" },
   noExternal: ["@camerihq/contract"],
-  define: {
-    __CAMERI_VERSION__: JSON.stringify(pkg.version),
-  },
 });

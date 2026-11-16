@@ -96,6 +96,9 @@ export default class CameriReporter implements Reporter {
     const shardIndex = this.config.shardIndex ?? config.shard?.current ?? 1;
 
     this.ready = this.guard("open run", async () => {
+      // Before anything is written: an incompatible server turns reporting off
+      // here, instead of being left with a run this reporter cannot finish.
+      await this.client.handshake();
       const response = await this.client.createRun({
         runKey,
         expectedShards,
