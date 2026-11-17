@@ -110,6 +110,27 @@ reviewed act instead, and run it yourself when you mean to:
 docker compose exec cameri node dist/migrate.js
 ```
 
+#### Reporter and server versions
+
+The server and its clients (`@camerihq/reporter`, `@camerihq/cli`) are released
+separately, so each one sends its own package version in an `x-cameri-version`
+header, and checks the other's. The server and a client are compatible by npm's
+`^` rules: the same major from 1.0.0, the same minor below that, and the exact
+version below 0.1.0. A release that breaks the wire is a major one; a release
+that only adds to it is a minor one, and the other side tolerates it.
+
+Both sides enforce it:
+
+- The server refuses an incompatible client on every request with
+  `426 Upgrade Required`, and the reporter turns itself off with that message.
+  The tests still run; only reporting stops.
+- A client asks `GET /api/v1/health` for the server's version before it writes
+  anything. Against an incompatible server, the reporter turns itself off
+  without opening a run, and the CLI falls back to `--shard=i/n`.
+
+A missing header is never compatible: it is a build from before versioning. The
+URL version (`/api/v1`) only changes for a break that no release can bridge.
+
 ## Point your suite at it
 
 ```sh

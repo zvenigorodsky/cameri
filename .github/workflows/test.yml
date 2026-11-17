@@ -47,3 +47,168 @@ jobs:
           platforms: linux/amd64
           cache-from: type=gha
           cache-to: type=gha,mode=max
+
+  # Compatibility with every published release this build claims to work
+  # with, in both directions. `compat-plan` works out which versions those are
+  # (scripts/compat-plan.ts) and lists them in the run's summary; the two jobs
+  # after it run once per version.
+  compat-plan:
+    name: compat (plan)
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.plan.outputs.version }}
+      reporters: ${{ steps.plan.outputs.reporters }}
+      servers: ${{ steps.plan.outputs.servers }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # The release tags, to find the last release.
+          fetch-depth: 0
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      # A pull request labelled `breaking` is checked as the next incompatible
+      # version, which nothing published is compatible with yet.
+      - id: plan
+        env:
+          BREAKING: ${{ contains(github.event.pull_request.labels.*.name, 'breaking') }}
+        run: |
+          if [ "$BREAKING" = true ]; then
+            node --import tsx scripts/compat-plan.ts --breaking
+          else
+            node --import tsx scripts/compat-plan.ts
+          fi
+
+  compat-server:
+    name: compat (this server × reporter ${{ matrix.reporter }})
+    needs: compat-plan
+    if: needs.compat-plan.outputs.reporters != '[]'
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        reporter: ${{ fromJSON(needs.compat-plan.outputs.reporters) }}
+    services:
+      postgres:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_USER: cameri
+          POSTGRES_PASSWORD: cameri
+          POSTGRES_DB: cameri_test
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U cameri" --health-interval 2s --health-timeout 5s
+          --health-retries 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+
+      - name: Version this build as ${{ needs.compat-plan.outputs.version }}
+        env:
+          VERSION: ${{ needs.compat-plan.outputs.version }}
+        run: node scripts/set-version.mjs "$VERSION"
+
+      - name: Reporter ${{ matrix.reporter }}, from npm
+        env:
+          VERSION: ${{ matrix.reporter }}
+        run: |
+          mkdir -p "$RUNNER_TEMP/reporter"
+          npm pack "@camerihq/playwright-reporter@$VERSION" --pack-destination "$RUNNER_TEMP"
+          tar -xzf "$RUNNER_TEMP/camerihq-playwright-reporter-$VERSION.tgz" \
+            -C "$RUNNER_TEMP/reporter" --strip-components=1
+
+      - name: This server with it
+        env:
+          TEST_DATABASE_URL: postgres://cameri:cameri@localhost:5432/cameri_test
+          COMPAT_REPORTER: ${{ runner.temp }}/reporter
+        run: >
+          pnpm --filter @camerihq/server exec
+          node --import tsx --test src/compat/released-reporter.test.ts
+
+  compat-reporter:
+    name: compat (this reporter × server ${{ matrix.server }})
+    needs: compat-plan
+    if: needs.compat-plan.outputs.servers != '[]'
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        server: ${{ fromJSON(needs.compat-plan.outputs.servers) }}
+    services:
+      postgres:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_USER: cameri
+          POSTGRES_PASSWORD: cameri
+          POSTGRES_DB: cameri
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U cameri" --health-interval 2s --health-timeout 5s
+          --health-retries 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+
+      - name: Build this reporter as ${{ needs.compat-plan.outputs.version }}
+        env:
+          VERSION: ${{ needs.compat-plan.outputs.version }}
+        run: |
+          node scripts/set-version.mjs "$VERSION"
+          pnpm --filter @camerihq/playwright-reporter build
+
+      # On the host network, so it reaches Postgres on localhost and its upload
+      # URLs (http://localhost:3000) reach it.
+      - name: Server ${{ matrix.server }}, from its image
+        id: server
+        env:
+          IMAGE: ghcr.io/${{ github.repository }}:${{ matrix.server }}
+        run: |
+          docker run -d --name released-server --network host \
+            -e DATABASE_URL=postgres://cameri:cameri@localhost:5432/cameri "$IMAGE"
+          for _ in $(seq 1 60); do
+            curl -fsS http://localhost:3000/api/v1/health >/dev/null && break
+            sleep 1
+          done
+          key=$(docker exec released-server node dist/bootstrap.js compat | grep -o 'cam_[A-Za-z0-9_-]*')
+          echo "::add-mask::$key"
+          echo "record-key=$key" >> "$GITHUB_OUTPUT"
+
+      - name: This reporter with it
+        env:
+          CAMERI_REPORTER: ${{ github.workspace }}/packages/reporter/dist/index.cjs
+          CAMERI_SERVER_URL: http://localhost:3000
+          CAMERI_RECORD_KEY: ${{ steps.server.outputs.record-key }}
+          CAMERI_RUN_KEY: compat-${{ github.run_id }}-${{ github.run_attempt }}
+          CAMERI_DEBUG: "1"
+        run: |
+          pnpm exec playwright test --config compat/suite/playwright.config.ts 2>&1 \
+            | tee "$RUNNER_TEMP/suite.log"
+          # The reporter never fails the suite, so its own log is the verdict:
+          # it turns itself off against a server it cannot work with, and
+          # otherwise prints the run status the server answered its sign-off with.
+          if grep -q "reporting is now off" "$RUNNER_TEMP/suite.log"; then
+            echo "::error::This reporter turned itself off against server ${{ matrix.server }}."
+            exit 1
+          fi
+          if ! grep -q "run is passed" "$RUNNER_TEMP/suite.log"; then
+            echo "::error::The run never reached 'passed' on server ${{ matrix.server }}."
+            exit 1
+          fi
+
+      - name: Server ${{ matrix.server }}'s log
+        if: failure() && steps.server.outcome != 'skipped'
+        run: docker logs released-server

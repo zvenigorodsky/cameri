@@ -20,10 +20,11 @@ import {
   INGEST_API_VERSION,
   RECORD_KEY_HEADER,
 } from "@camerihq/contract/constants";
-
-declare const __CAMERI_VERSION__: string;
-const CLIENT_VERSION =
-  typeof __CAMERI_VERSION__ === "string" ? __CAMERI_VERSION__ : "0.0.0-dev";
+import {
+  areVersionsCompatible,
+  VERSION_HEADER,
+} from "@camerihq/contract/versioning";
+import { CLI_VERSION } from "./version.ts";
 
 /**
  * Discovery loads every spec file in the repo, which on a large suite is not
@@ -105,19 +106,34 @@ export type PlanResult =
 /** Asks the server for this shard's slice. */
 export async function requestPlan(request: PlanRequest): Promise<PlanResult> {
   const { serverUrl, recordKey, ...body } = request;
-  const url = `${serverUrl.replace(/\/+$/, "")}/api/${INGEST_API_VERSION}/runs/plan`;
+  const api = `${serverUrl.replace(/\/+$/, "")}/api/${INGEST_API_VERSION}`;
 
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), PLAN_TIMEOUT_MS);
 
   try {
-    const response = await fetch(url, {
+    // The CLI's half of version checking (see `@camerihq/contract/versioning`):
+    // asking for a plan writes one, so check the server first. An incompatible
+    // server's plan might not mean what this CLI thinks it means, so shard the
+    // old way instead.
+    const health = await fetch(`${api}/health`, { signal: controller.signal });
+    if (!health.ok) return undefined;
+    const serverVersion = health.headers.get(VERSION_HEADER);
+    if (!areVersionsCompatible({ server: serverVersion, client: CLI_VERSION })) {
+      return {
+        error: `server ${serverVersion || "(unknown version)"} is not compatible with cli ${CLI_VERSION}`,
+        fatal: false,
+      };
+    }
+
+    const response = await fetch(`${api}/runs/plan`, {
       method: "POST",
       signal: controller.signal,
       headers: {
         "content-type": "application/json",
         [RECORD_KEY_HEADER]: recordKey,
-        [CLIENT_VERSION_HEADER]: `cli/${CLIENT_VERSION}`,
+        [CLIENT_VERSION_HEADER]: `cli/${CLI_VERSION}`,
+        [VERSION_HEADER]: CLI_VERSION,
       },
       body: JSON.stringify(body),
     });

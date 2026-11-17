@@ -16,6 +16,10 @@
     "./ci": {
       "types": "./src/ci.ts",
       "default": "./src/ci.ts"
+    },
+    "./versioning": {
+      "types": "./src/versioning.ts",
+      "default": "./src/versioning.ts"
     }
   },
   "scripts": {

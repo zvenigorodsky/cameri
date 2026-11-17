@@ -1,6 +1,10 @@
 import assert from "node:assert/strict";
+import { createServer } from "node:http";
+import type { AddressInfo } from "node:net";
 import { describe, it } from "node:test";
-import { parseShard, parseSpecList, specFilter } from "./orchestrate.ts";
+import { VERSION_HEADER } from "@camerihq/contract/versioning";
+import { parseShard, parseSpecList, requestPlan, specFilter } from "./orchestrate.ts";
+import { CLI_VERSION } from "./version.ts";
 
 describe("parseShard", () => {
   it("reads index and total", () => {
@@ -59,5 +63,58 @@ describe("specFilter", () => {
     assert.match("tests/app(v2)/a+b.spec.ts", new RegExp(filter));
     // Unescaped, the `.` would match any character here.
     assert.doesNotMatch("tests/app(v2)/a+bXspec.ts", new RegExp(filter));
+  });
+});
+
+describe("requestPlan and version checking", () => {
+  /**
+   * A planner whose `/health` names `version` (or nothing), and whose plan
+   * route answers with one spec. Returns `METHOD path version-header` for
+   * every request it got.
+   */
+  async function withPlanner<T>(version: string | undefined, run: (url: string) => Promise<T>) {
+    const requests: string[] = [];
+    const server = createServer((request, response) => {
+      requests.push(`${request.method} ${request.url} ${request.headers[VERSION_HEADER] ?? "-"}`);
+      request.resume();
+      request.on("end", () => {
+        const headers: Record<string, string> = { "content-type": "application/json" };
+        if (version !== undefined) headers[VERSION_HEADER] = version;
+        const body = request.url?.endsWith("/health") ? { ok: true } : { specs: ["a.spec.ts"] };
+        response.writeHead(200, headers).end(JSON.stringify(body));
+      });
+    });
+    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+    try {
+      const url = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+      return { result: await run(url), requests };
+    } finally {
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+    }
+  }
+
+  const plan = (serverUrl: string) =>
+    requestPlan({
+      serverUrl,
+      recordKey: "cam_test",
+      runKey: "run",
+      shardIndex: 1,
+      expectedShards: 2,
+      specs: ["a.spec.ts"],
+    });
+
+  it("checks the server first, then sends its version with the plan request", async () => {
+    const { result, requests } = await withPlanner(CLI_VERSION, plan);
+    assert.ok(result && "plan" in result);
+    assert.deepEqual(requests, ["GET /api/v1/health -", `POST /api/v1/runs/plan ${CLI_VERSION}`]);
+  });
+
+  it("falls back without asking for a plan when the server is from before versioning", async () => {
+    const { result, requests } = await withPlanner(undefined, plan);
+    assert.ok(result && "error" in result);
+    assert.equal(result.fatal, false);
+    assert.match(result.error, /server \(unknown version\) is not compatible with cli/);
+    // Nothing written: the plan route was never called.
+    assert.deepEqual(requests, ["GET /api/v1/health -"]);
   });
 });

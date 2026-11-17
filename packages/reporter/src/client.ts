@@ -14,12 +14,15 @@ import {
   INGEST_API_VERSION,
   RECORD_KEY_HEADER,
 } from "@camerihq/contract/constants";
+import {
+  areVersionsCompatible,
+  VERSION_HEADER,
+} from "@camerihq/contract/versioning";
+import reporterPackage from "../package.json" with { type: "json" };
 import type { ResolvedConfig } from "./config.ts";
 
-// Injected at build time by tsup so the server can spot stale reporters.
-declare const __CAMERI_VERSION__: string;
-const CLIENT_VERSION =
-  typeof __CAMERI_VERSION__ === "string" ? __CAMERI_VERSION__ : "0.0.0-dev";
+/** This reporter's version, from its own `package.json`. */
+export const REPORTER_VERSION: string = reporterPackage.version;
 
 export class IngestError extends Error {
   constructor(
@@ -34,8 +37,39 @@ export class IngestError extends Error {
 
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
+/** The server's `error.message` when the body is its JSON error, else the body as is. */
+function errorMessage(body: string): string {
+  try {
+    const message = (JSON.parse(body) as { error?: { message?: unknown } }).error?.message;
+    return typeof message === "string" ? message : body;
+  } catch {
+    return body;
+  }
+}
+
 export class IngestClient {
   constructor(private readonly config: ResolvedConfig) {}
+
+  /**
+   * The reporter's half of version checking (see `@camerihq/contract/versioning`).
+   *
+   * Asks the server for its version before anything is written, so an
+   * incompatible server is never left holding a run this reporter cannot
+   * finish. A server from before versioning answers without the header, which
+   * counts as incompatible. Not retryable: the reporter turns itself off once,
+   * with this message, and the tests run on unreported.
+   */
+  async handshake(): Promise<void> {
+    const response = await this.send("GET", "/health");
+    const serverVersion = response.headers.get(VERSION_HEADER);
+    if (areVersionsCompatible({ server: serverVersion, client: REPORTER_VERSION })) return;
+    throw new IngestError(
+      `server ${serverVersion || "(unknown version)"} is not compatible with reporter ` +
+        `${REPORTER_VERSION}. Use a server and reporter from compatible releases.`,
+      response.status,
+      false,
+    );
+  }
 
   createRun(body: CreateRunRequest): Promise<CreateRunResponse> {
     return this.post<CreateRunResponse>("/runs", body);
@@ -70,6 +104,17 @@ export class IngestClient {
     body: unknown,
     maxRetries = this.config.maxRetries,
   ): Promise<T> {
+    const response = await this.send("POST", path, body, maxRetries);
+    return (await response.json()) as T;
+  }
+
+  /** One request with retries, resolving to the first successful response. */
+  private async send(
+    method: "GET" | "POST",
+    path: string,
+    body?: unknown,
+    maxRetries = this.config.maxRetries,
+  ): Promise<Response> {
     const url = `${this.config.serverUrl}/api/${INGEST_API_VERSION}${path}`;
     let lastError: unknown;
 
@@ -86,22 +131,23 @@ export class IngestClient {
 
       try {
         const response = await fetch(url, {
-          method: "POST",
+          method,
           signal: controller.signal,
           headers: {
             "content-type": "application/json",
             [RECORD_KEY_HEADER]: this.config.recordKey,
-            [CLIENT_VERSION_HEADER]: `playwright-reporter/${CLIENT_VERSION}`,
+            [CLIENT_VERSION_HEADER]: `playwright-reporter/${REPORTER_VERSION}`,
+            [VERSION_HEADER]: REPORTER_VERSION,
           },
-          body: JSON.stringify(body),
+          body: body === undefined ? undefined : JSON.stringify(body),
         });
 
-        if (response.ok) return (await response.json()) as T;
+        if (response.ok) return response;
 
         const retryable = response.status >= 500 || response.status === 429;
-        const detail = await response.text().catch(() => "");
+        const detail = errorMessage(await response.text().catch(() => ""));
         lastError = new IngestError(
-          `${path} → ${response.status} ${detail.slice(0, 200)}`,
+          `${path} → ${response.status} ${detail.slice(0, 300)}`,
           response.status,
           retryable,
         );

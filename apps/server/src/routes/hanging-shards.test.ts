@@ -13,6 +13,7 @@ import { randomUUID } from "node:crypto";
 import { after, afterEach, before, beforeEach, describe, it, mock } from "node:test";
 import type { CreateRunResponse, ShardHeartbeatResponse } from "@camerihq/contract";
 import { RECORD_KEY_HEADER } from "@camerihq/contract/constants";
+import { VERSION_HEADER } from "@camerihq/contract/versioning";
 import { projects, recordKeys } from "@camerihq/db";
 import { eq } from "drizzle-orm";
 import { createApp } from "../app.ts";
@@ -21,6 +22,7 @@ import { createContext, type AppContext } from "../context.ts";
 import { loadEnv, type Env } from "../env.ts";
 import { migrateToLatest } from "../migrations.ts";
 import { appRouter } from "../trpc/router.ts";
+import { SERVER_VERSION } from "../version-guard.ts";
 
 const TEST_DATABASE_URL = process.env.TEST_DATABASE_URL;
 
@@ -90,7 +92,12 @@ describe(
     async function post(path: string, body: unknown): Promise<Response> {
       return server.request(`/api/v1${path}`, {
         method: "POST",
-        headers: { "content-type": "application/json", [RECORD_KEY_HEADER]: recordKey },
+        headers: {
+          "content-type": "application/json",
+          [RECORD_KEY_HEADER]: recordKey,
+          // A client from the same release as the server.
+          [VERSION_HEADER]: SERVER_VERSION,
+        },
         body: JSON.stringify(body),
       });
     }
