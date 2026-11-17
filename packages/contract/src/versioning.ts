@@ -28,14 +28,14 @@
  */
 export const VERSION_HEADER = "x-cameri-version";
 
-interface Version {
+export interface Version {
   major: number;
   minor: number;
   patch: number;
 }
 
 /** `1.2.3`, or `1.2.3-beta.1` with the pre-release ignored. Anything else is no version. */
-function parseVersion(value: string | null | undefined): Version | undefined {
+export function parseVersion(value: string | null | undefined): Version | undefined {
   const match = /^(\d+)\.(\d+)\.(\d+)(?:[-+].*)?$/.exec(value?.trim() ?? "");
   if (!match) return undefined;
   return { major: Number(match[1]), minor: Number(match[2]), patch: Number(match[3]) };
